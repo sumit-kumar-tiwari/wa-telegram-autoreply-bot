@@ -2,13 +2,15 @@ const {
   default: makeWASocket,
   useMultiFileAuthState,
   DisconnectReason,
-  fetchLatestBaileysVersion
+  fetchLatestBaileysVersion,
+  Browsers
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const express = require('express');
 const axios = require('axios');
 const qrcode = require('qrcode-terminal');
 const path = require('path');
+const fs = require('fs');
 require('dotenv').config();
 
 // Initialize Express App for Render Web Service
@@ -17,7 +19,9 @@ const PORT = process.env.PORT || 3000;
 
 let waSocket = null;
 let isConnected = false;
+let isPairingRequested = false;
 const cooldownMap = new Map(); // Stores senderJid -> lastReplyTimestamp
+const authDir = path.join(__dirname, 'auth_info_baileys');
 
 // Helper to escape HTML for Telegram
 function escapeHtml(text) {
@@ -84,7 +88,6 @@ async function sendToTelegram({ name, number, message, profilePicUrl }) {
 
 // Function to start WhatsApp Client via Baileys
 async function startWhatsApp() {
-  const authDir = path.join(__dirname, 'auth_info_baileys');
   const { state, saveCreds } = await useMultiFileAuthState(authDir);
   const { version, isLatest } = await fetchLatestBaileysVersion();
 
@@ -95,30 +98,45 @@ async function startWhatsApp() {
     logger: pino({ level: 'silent' }),
     printQRInTerminal: false,
     auth: state,
-    browser: ['Ubuntu', 'Chrome', '20.0.04']
+    browser: Browsers.ubuntu('Chrome'),
+    connectTimeoutMs: 60000,
+    defaultQueryTimeoutMs: 60000,
+    keepAliveIntervalMs: 25000,
+    markOnlineOnConnect: true,
+    syncFullHistory: false
   });
 
-  // Pairing code feature for headless cloud platforms like Render
-  if (!waSocket.authState.creds.registered && process.env.PHONE_NUMBER) {
+  // Pairing code feature - only request ONCE so code stays stable
+  const isRegistered = waSocket.authState?.creds?.registered;
+
+  if (!isRegistered && process.env.PHONE_NUMBER && !isPairingRequested) {
     const rawNumber = process.env.PHONE_NUMBER.replace(/[^0-9]/g, '');
     console.log(`\n⏳ Requesting 8-digit Pairing Code for phone number: +${rawNumber}...`);
+    
+    isPairingRequested = true;
+
     setTimeout(async () => {
       try {
+        if (waSocket.authState?.creds?.registered) return;
+
         const code = await waSocket.requestPairingCode(rawNumber);
         console.log('\n' + '='.repeat(50));
         console.log(`🔥 YOUR WHATSAPP PAIRING CODE: ${code}`);
         console.log('='.repeat(50));
         console.log('👉 WhatsApp open karein -> Linked Devices -> "Link with phone number instead"');
-        console.log(`👉 Yeh 8-digit code daalein: ${code}\n`);
+        console.log(`👉 Yeh 8-digit code daalein: ${code}`);
+        console.log('👉 (Yeh code stable rahega, aaram se phone me enter karein)\n');
       } catch (err) {
         console.error('❌ Failed to get pairing code:', err.message);
+        isPairingRequested = false; // Allow retry on fatal failure
       }
-    }, 4000);
+    }, 6000);
   }
 
   // Connection Update Event
   waSocket.ev.on('connection.update', (update) => {
     const { connection, lastDisconnect, qr } = update;
+    const statusCode = lastDisconnect?.error?.output?.statusCode;
 
     if (qr && !process.env.PHONE_NUMBER) {
       console.log('\n📲 QR Code received (scan if viewing in terminal):');
@@ -127,16 +145,35 @@ async function startWhatsApp() {
 
     if (connection === 'close') {
       isConnected = false;
-      const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-      console.log('⚠️ WhatsApp connection closed. Reconnecting:', shouldReconnect);
+      const isAlreadyRegistered = waSocket?.authState?.creds?.registered;
 
-      if (shouldReconnect) {
+      console.log(`⚠️ WhatsApp connection closed. Code: ${statusCode || 'unknown'}, Registered: ${Boolean(isAlreadyRegistered)}`);
+
+      // If user explicitly unlinked from phone settings AFTER being registered
+      if (isAlreadyRegistered && statusCode === DisconnectReason.loggedOut) {
+        console.log('❌ Device was unlinked from WhatsApp. Resetting session...');
+        try {
+          fs.rmSync(authDir, { recursive: true, force: true });
+        } catch (e) {}
+        isPairingRequested = false;
         setTimeout(startWhatsApp, 3000);
-      } else {
-        console.log('❌ Device logged out. Please delete auth_info_baileys and restart.');
+        return;
       }
+
+      // During pairing handshake: 515 (restartRequired) or temporary network close is NORMAL
+      // DO NOT reset session or change code, just reconnect cleanly
+      if (statusCode === DisconnectReason.restartRequired) {
+        console.log('🔄 Completing WhatsApp pairing handshake...');
+        setTimeout(startWhatsApp, 2000);
+        return;
+      }
+
+      // Keep connection alive so user has ample time to enter pairing code
+      console.log('🔄 Reconnecting to keep pairing session alive...');
+      setTimeout(startWhatsApp, 3000);
     } else if (connection === 'open') {
       isConnected = true;
+      isPairingRequested = false;
       console.log('\n🚀 WhatsApp successfully connected and ready!');
     }
   });

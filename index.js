@@ -24,9 +24,24 @@ let isPairingRequested = false;
 let activeChatId = (process.env.TELEGRAM_CHAT_ID || '').trim();
 let currentQrDataUrl = null;
 let currentPairingCode = null;
-const cooldownMap = new Map(); // Stores senderJid -> lastReplyTimestamp
+
+// Unique 2-Hour Cooldown per Contact for both Telegram Alert & WhatsApp Auto-Reply
+const contactCooldownMap = new Map(); // senderJid -> lastTriggerTimestamp
+const COOLDOWN_HOURS = parseFloat(process.env.COOLDOWN_HOURS || '2');
+const COOLDOWN_MS = COOLDOWN_HOURS * 60 * 60 * 1000; // 2 hours in ms
+
 const authDir = path.join(__dirname, 'auth_info_baileys');
 const localImagePath = path.join(__dirname, 'autoreply.jpg');
+
+// Clean up expired cooldown entries every hour to keep memory ultra-lean
+setInterval(() => {
+  const cutoff = Date.now() - COOLDOWN_MS;
+  for (const [jid, timestamp] of contactCooldownMap.entries()) {
+    if (timestamp < cutoff) {
+      contactCooldownMap.delete(jid);
+    }
+  }
+}, 60 * 60 * 1000);
 
 // Helper to escape HTML characters for Telegram formatting
 function escapeHtml(text) {
@@ -288,6 +303,20 @@ async function startWhatsApp() {
       const senderNumber = senderJid.replace('@s.whatsapp.net', '');
       const senderName = m.pushName || 'Unknown User';
 
+      // CHECK UNIQUE CONTACT 2-HOUR COOLDOWN
+      const now = Date.now();
+      const lastTriggerTime = contactCooldownMap.get(senderJid) || 0;
+
+      if (now - lastTriggerTime < COOLDOWN_MS) {
+        const remainingMinutes = Math.ceil((COOLDOWN_MS - (now - lastTriggerTime)) / 60000);
+        console.log(`⏳ [Cooldown Active] Message from +${senderNumber} (${senderName}) ignored. Alert & Auto-reply active again in ~${remainingMinutes} mins.`);
+        continue; // Skip both Telegram notification and WhatsApp auto-reply
+      }
+
+      // 1st Message detected! Update cooldown immediately
+      contactCooldownMap.set(senderJid, now);
+      console.log(`\n🎯 [1st Message Detected] +${senderNumber} (${senderName}). Triggering alert & auto-reply. Cooldown locked for ${COOLDOWN_HOURS} hours.`);
+
       // Extract message text / caption / media type
       const msg = m.message;
       let messageContent = '';
@@ -318,7 +347,7 @@ async function startWhatsApp() {
         messageContent = '💬 [Message]';
       }
 
-      console.log(`\n📨 Message from +${senderNumber} (${senderName}): ${messageContent}`);
+      console.log(`📨 Message content from +${senderNumber}: ${messageContent}`);
 
       // 1. Fetch Profile Picture if available
       let profilePicUrl = null;
@@ -328,7 +357,7 @@ async function startWhatsApp() {
         profilePicUrl = null;
       }
 
-      // 2. Send Telegram Notification
+      // 2. Send Telegram Notification (Triggered ONLY on 1st message)
       await sendToTelegram({
         name: senderName,
         number: senderNumber,
@@ -336,32 +365,22 @@ async function startWhatsApp() {
         profilePicUrl: profilePicUrl
       });
 
-      // 3. Send WhatsApp Auto-Reply (Photo with Caption if image exists, else text)
-      const now = Date.now();
-      const cooldownMinutes = parseInt(process.env.COOLDOWN_MINUTES || '15', 10);
-      const cooldownMs = cooldownMinutes * 60 * 1000;
-      const lastReplyTime = cooldownMap.get(senderJid) || 0;
+      // 3. Send WhatsApp Auto-Reply (Triggered ONLY on 1st message with Cat Meme photo)
+      const autoReplyText = process.env.AUTO_REPLY_MESSAGE || "he'll response once he get online.";
 
-      if (now - lastReplyTime > cooldownMs) {
-        cooldownMap.set(senderJid, now);
-        const autoReplyText = process.env.AUTO_REPLY_MESSAGE || "he'll response once he get online.";
-
-        try {
-          if (fs.existsSync(localImagePath)) {
-            await waSocket.sendMessage(senderJid, {
-              image: fs.readFileSync(localImagePath),
-              caption: autoReplyText
-            }, { quoted: m });
-            console.log(`🤖 [Auto-Reply] Sent cat photo reply with caption to +${senderNumber}`);
-          } else {
-            await waSocket.sendMessage(senderJid, { text: autoReplyText }, { quoted: m });
-            console.log(`🤖 [Auto-Reply] Sent text reply to +${senderNumber}: "${autoReplyText}"`);
-          }
-        } catch (err) {
-          console.error(`❌ [Auto-Reply] Failed to send reply to +${senderNumber}:`, err.message);
+      try {
+        if (fs.existsSync(localImagePath)) {
+          await waSocket.sendMessage(senderJid, {
+            image: fs.readFileSync(localImagePath),
+            caption: autoReplyText
+          }, { quoted: m });
+          console.log(`🤖 [Auto-Reply] Sent cat photo reply with caption to +${senderNumber}`);
+        } else {
+          await waSocket.sendMessage(senderJid, { text: autoReplyText }, { quoted: m });
+          console.log(`🤖 [Auto-Reply] Sent text reply to +${senderNumber}: "${autoReplyText}"`);
         }
-      } else {
-        console.log(`⏳ [Cooldown] Auto-reply skipped for +${senderNumber} (already replied within ${cooldownMinutes}m)`);
+      } catch (err) {
+        console.error(`❌ [Auto-Reply] Failed to send reply to +${senderNumber}:`, err.message);
       }
     }
   });
@@ -413,10 +432,11 @@ app.get('/', (req, res) => {
           <meta name="viewport" content="width=device-width, initial-scale=1">
         </head>
         <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; text-align: center; padding: 60px 20px; background-color: #f0f2f5;">
-          <div style="max-width: 500px; margin: 0 auto; background: white; padding: 40px; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.08);">
+          <div style="max-width: 500px; margin: 0 auto; background: white; padding: 40px 25px; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.08);">
             <div style="font-size: 54px; margin-bottom: 10px;">✅</div>
             <h2 style="color: #128c7e; margin-bottom: 8px;">Bot is Active & Running</h2>
             <p style="color: #555; font-size: 16px;">WhatsApp is connected and listening for messages 24/7.</p>
+            <p style="color: #777; font-size: 14px;">Cooldown: 1 alert & auto-reply per contact every ${COOLDOWN_HOURS} hours.</p>
             <div style="margin-top: 25px; padding: 12px; background: #e8f5e9; border-radius: 8px; color: #2e7d32; font-weight: 500;">
               Uptime: ${Math.floor(process.uptime())} seconds
             </div>
@@ -472,6 +492,7 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     whatsappConnected: isConnected,
+    cooldownHours: COOLDOWN_HOURS,
     uptimeSeconds: Math.floor(process.uptime())
   });
 });

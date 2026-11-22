@@ -20,6 +20,7 @@ const PORT = process.env.PORT || 3000;
 let waSocket = null;
 let isConnected = false;
 let isPairingRequested = false;
+let activeChatId = (process.env.TELEGRAM_CHAT_ID || '').trim();
 const cooldownMap = new Map(); // Stores senderJid -> lastReplyTimestamp
 const authDir = path.join(__dirname, 'auth_info_baileys');
 
@@ -34,14 +35,43 @@ function escapeHtml(text) {
     .replace(/'/g, '&#039;');
 }
 
-// Telegram Notification Sender with multi-level fallback
+// Function to auto-detect valid Chat ID from Telegram getUpdates
+async function fetchLatestChatId(token) {
+  try {
+    const res = await axios.get(`https://api.telegram.org/bot${token}/getUpdates`);
+    const updates = res.data?.result || [];
+    for (let i = updates.length - 1; i >= 0; i--) {
+      const cid = updates[i]?.message?.chat?.id;
+      if (cid) {
+        return String(cid);
+      }
+    }
+  } catch (err) {
+    console.error('⚠️ [Telegram] Error querying getUpdates:', err.response?.data || err.message);
+  }
+  return null;
+}
+
+// Telegram Notification Sender with auto-detection & recovery
 async function sendToTelegram({ name, number, message, profilePicUrl }) {
   const token = (process.env.TELEGRAM_BOT_TOKEN || '').trim();
-  const chatId = (process.env.TELEGRAM_CHAT_ID || '').trim();
 
-  if (!token || !chatId) {
-    console.error('⚠️ [Telegram] TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID is missing or empty in Render Environment Variables!');
+  if (!token) {
+    console.error('⚠️ [Telegram] TELEGRAM_BOT_TOKEN is missing in environment variables!');
     return;
+  }
+
+  // If no chat ID set or previous failed, attempt auto-detection from getUpdates
+  if (!activeChatId) {
+    console.log('🔍 [Telegram] No Chat ID configured. Searching getUpdates for recent conversations...');
+    const detectedId = await fetchLatestChatId(token);
+    if (detectedId) {
+      activeChatId = detectedId;
+      console.log(`🎯 [Telegram] Auto-detected Telegram Chat ID: ${activeChatId}`);
+    } else {
+      console.error('❌ [Telegram] No Chat ID found! Please send a message (e.g. "/start") to your Telegram bot.');
+      return;
+    }
   }
 
   const timeString = new Date().toLocaleTimeString('en-IN', {
@@ -64,45 +94,67 @@ async function sendToTelegram({ name, number, message, profilePicUrl }) {
                            `💬 Message:\n${message}\n\n` +
                            `⏰ Timestamp: ${timeString}`;
 
-  // Step 1: Attempt to send photo with HTML caption
-  if (profilePicUrl) {
+  // Helper to execute sending
+  async function attemptSend(targetChatId) {
+    if (profilePicUrl) {
+      try {
+        await axios.post(`https://api.telegram.org/bot${token}/sendPhoto`, {
+          chat_id: targetChatId,
+          photo: profilePicUrl,
+          caption: htmlContent,
+          parse_mode: 'HTML'
+        });
+        console.log(`✅ [Telegram] Photo notification successfully sent to ${targetChatId} for +${number} (${name})`);
+        return true;
+      } catch (photoErr) {
+        console.warn(`⚠️ [Telegram] sendPhoto failed: ${photoErr.response?.data?.description || photoErr.message}, falling back to text...`);
+      }
+    }
+
     try {
-      await axios.post(`https://api.telegram.org/bot${token}/sendPhoto`, {
-        chat_id: chatId,
-        photo: profilePicUrl,
-        caption: htmlContent,
+      await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, {
+        chat_id: targetChatId,
+        text: htmlContent,
         parse_mode: 'HTML'
       });
-      console.log(`✅ [Telegram] Photo notification successfully sent for +${number} (${name})`);
-      return;
-    } catch (photoErr) {
-      console.warn(`⚠️ [Telegram] sendPhoto failed (${photoErr.response?.data?.description || photoErr.message}), falling back to text...`);
+      console.log(`✅ [Telegram] HTML notification successfully sent to ${targetChatId} for +${number} (${name})`);
+      return true;
+    } catch (textErr) {
+      console.warn(`⚠️ [Telegram] sendMessage with HTML failed: ${textErr.response?.data?.description || textErr.message}, trying plain text...`);
     }
-  }
 
-  // Step 2: Attempt to send formatted HTML text message
-  try {
     await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, {
-      chat_id: chatId,
-      text: htmlContent,
-      parse_mode: 'HTML'
-    });
-    console.log(`✅ [Telegram] HTML text notification successfully sent for +${number} (${name})`);
-    return;
-  } catch (textErr) {
-    console.warn(`⚠️ [Telegram] sendMessage with HTML failed (${textErr.response?.data?.description || textErr.message}), trying plain text...`);
-  }
-
-  // Step 3: Attempt to send plain text message (guaranteed safe against parse errors)
-  try {
-    await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, {
-      chat_id: chatId,
+      chat_id: targetChatId,
       text: plainTextContent
     });
-    console.log(`✅ [Telegram] Plain text notification successfully sent for +${number} (${name})`);
-  } catch (finalErr) {
-    const errorDetails = finalErr.response?.data || finalErr.message;
-    console.error('❌ [Telegram] Error sending message to Telegram:', JSON.stringify(errorDetails));
+    console.log(`✅ [Telegram] Plain text notification successfully sent to ${targetChatId} for +${number} (${name})`);
+    return true;
+  }
+
+  try {
+    await attemptSend(activeChatId);
+  } catch (err) {
+    const errorDesc = err.response?.data?.description || err.message;
+    console.error(`❌ [Telegram] Delivery failed to Chat ID ${activeChatId}: ${errorDesc}`);
+
+    // If chat not found, auto-recover by querying getUpdates to find the real user ID
+    if (String(errorDesc).includes('chat not found')) {
+      console.log('🔄 "chat not found" encountered. Checking getUpdates to auto-discover your real Chat ID...');
+      const freshChatId = await fetchLatestChatId(token);
+
+      if (freshChatId && freshChatId !== activeChatId) {
+        console.log(`💡 Discovered correct Chat ID: ${freshChatId}. Retrying delivery now...`);
+        activeChatId = freshChatId;
+        try {
+          await attemptSend(activeChatId);
+          console.log(`🎉 [Telegram] Successfully recovered and delivered notification to Chat ID: ${activeChatId}`);
+        } catch (retryErr) {
+          console.error('❌ [Telegram] Retry also failed:', retryErr.response?.data || retryErr.message);
+        }
+      } else {
+        console.log('👉 Tip: Open your Telegram bot and send "/start" or "hi" to register your chat with the bot!');
+      }
+    }
   }
 }
 
@@ -112,6 +164,17 @@ async function startWhatsApp() {
   const { version, isLatest } = await fetchLatestBaileysVersion();
 
   console.log(`Using Baileys version v${version.join('.')}, isLatest: ${isLatest}`);
+
+  // Query Telegram on boot to warm up activeChatId
+  const token = (process.env.TELEGRAM_BOT_TOKEN || '').trim();
+  if (token) {
+    fetchLatestChatId(token).then((detected) => {
+      if (detected) {
+        activeChatId = detected;
+        console.log(`📱 [Telegram] Verified active Telegram Chat ID: ${activeChatId}`);
+      }
+    });
+  }
 
   waSocket = makeWASocket({
     version,
@@ -299,6 +362,7 @@ app.get('/', (req, res) => {
       <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px; background-color: #f7f9fa;">
         <h2>🤖 WhatsApp Auto-Reply & Telegram Bot</h2>
         <p>Status: <b style="color: ${isConnected ? 'green' : 'orange'};">${isConnected ? 'Online & Connected to WhatsApp' : 'Connecting / Disconnected'}</b></p>
+        <p>Active Telegram Chat ID: <code>${activeChatId || 'Not detected yet'}</code></p>
         <p>Uptime: ${Math.floor(process.uptime())} seconds</p>
       </body>
     </html>
@@ -309,6 +373,7 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     whatsappConnected: isConnected,
+    telegramChatIdSet: Boolean(activeChatId),
     uptimeSeconds: Math.floor(process.uptime())
   });
 });

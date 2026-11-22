@@ -47,7 +47,7 @@ async function fetchLatestChatId(token) {
       }
     }
   } catch (err) {
-    console.error('⚠️ [Telegram] Error querying getUpdates:', err.response?.data || err.message);
+    console.error('⚠️ [Telegram] Error querying getUpdates:', err.response?.data?.description || err.message);
   }
   return null;
 }
@@ -63,13 +63,13 @@ async function sendToTelegram({ name, number, message, profilePicUrl }) {
 
   // If no chat ID set or previous failed, attempt auto-detection from getUpdates
   if (!activeChatId) {
-    console.log('🔍 [Telegram] No Chat ID configured. Searching getUpdates for recent conversations...');
+    console.log('🔍 [Telegram] Searching getUpdates for active conversations...');
     const detectedId = await fetchLatestChatId(token);
     if (detectedId) {
       activeChatId = detectedId;
       console.log(`🎯 [Telegram] Auto-detected Telegram Chat ID: ${activeChatId}`);
     } else {
-      console.error('❌ [Telegram] No Chat ID found! Please send a message (e.g. "/start") to your Telegram bot.');
+      console.error('❌ [Telegram] No Chat ID found! Please send "/start" to your Telegram bot.');
       return;
     }
   }
@@ -94,7 +94,6 @@ async function sendToTelegram({ name, number, message, profilePicUrl }) {
                            `💬 Message:\n${message}\n\n` +
                            `⏰ Timestamp: ${timeString}`;
 
-  // Helper to execute sending
   async function attemptSend(targetChatId) {
     if (profilePicUrl) {
       try {
@@ -137,9 +136,8 @@ async function sendToTelegram({ name, number, message, profilePicUrl }) {
     const errorDesc = err.response?.data?.description || err.message;
     console.error(`❌ [Telegram] Delivery failed to Chat ID ${activeChatId}: ${errorDesc}`);
 
-    // If chat not found, auto-recover by querying getUpdates to find the real user ID
     if (String(errorDesc).includes('chat not found')) {
-      console.log('🔄 "chat not found" encountered. Checking getUpdates to auto-discover your real Chat ID...');
+      console.log('🔄 "chat not found" encountered. Refreshing getUpdates...');
       const freshChatId = await fetchLatestChatId(token);
 
       if (freshChatId && freshChatId !== activeChatId) {
@@ -149,10 +147,8 @@ async function sendToTelegram({ name, number, message, profilePicUrl }) {
           await attemptSend(activeChatId);
           console.log(`🎉 [Telegram] Successfully recovered and delivered notification to Chat ID: ${activeChatId}`);
         } catch (retryErr) {
-          console.error('❌ [Telegram] Retry also failed:', retryErr.response?.data || retryErr.message);
+          console.error('❌ [Telegram] Retry also failed:', retryErr.response?.data?.description || retryErr.message);
         }
-      } else {
-        console.log('👉 Tip: Open your Telegram bot and send "/start" or "hi" to register your chat with the bot!');
       }
     }
   }
@@ -189,31 +185,33 @@ async function startWhatsApp() {
     syncFullHistory: false
   });
 
-  // Pairing code feature - only request once to ensure stable code
-  const isRegistered = waSocket.authState?.creds?.registered;
+  const isRegistered = Boolean(state?.creds?.registered);
+  const rawNumber = (process.env.PHONE_NUMBER || '').replace(/[^0-9]/g, '');
 
-  if (!isRegistered && process.env.PHONE_NUMBER && !isPairingRequested) {
-    const rawNumber = process.env.PHONE_NUMBER.replace(/[^0-9]/g, '');
-    console.log(`\n⏳ Requesting 8-digit Pairing Code for phone number: +${rawNumber}...`);
-    
-    isPairingRequested = true;
+  if (!isRegistered) {
+    if (!rawNumber) {
+      console.log('⚠️ [Config] PHONE_NUMBER is not set in environment variables! Please set PHONE_NUMBER in Render (e.g. 919219471405).');
+    } else if (!isPairingRequested) {
+      isPairingRequested = true;
+      console.log(`\n⏳ Requesting 8-digit Pairing Code for phone number: +${rawNumber}...`);
 
-    setTimeout(async () => {
-      try {
-        if (waSocket.authState?.creds?.registered) return;
+      setTimeout(async () => {
+        try {
+          if (state?.creds?.registered) return;
 
-        const code = await waSocket.requestPairingCode(rawNumber);
-        console.log('\n' + '='.repeat(50));
-        console.log(`🔥 YOUR WHATSAPP PAIRING CODE: ${code}`);
-        console.log('='.repeat(50));
-        console.log('👉 Open WhatsApp on your phone -> Settings -> Linked Devices -> "Link with phone number instead"');
-        console.log(`👉 Enter this 8-digit code: ${code}`);
-        console.log('👉 (This pairing code is stable; enter it directly on your phone)\n');
-      } catch (err) {
-        console.error('❌ Failed to get pairing code:', err.message);
-        isPairingRequested = false; // Allow retry on fatal failure
-      }
-    }, 6000);
+          const code = await waSocket.requestPairingCode(rawNumber);
+          console.log('\n' + '='.repeat(50));
+          console.log(`🔥 YOUR WHATSAPP PAIRING CODE: ${code}`);
+          console.log('='.repeat(50));
+          console.log('👉 Open WhatsApp on your phone -> Settings -> Linked Devices -> "Link with phone number instead"');
+          console.log(`👉 Enter this 8-digit code: ${code}`);
+          console.log('👉 (Enter this code directly on your phone)\n');
+        } catch (err) {
+          console.error('❌ Failed to get pairing code:', err.message);
+          isPairingRequested = false;
+        }
+      }, 5000);
+    }
   }
 
   // Connection Update Event
@@ -221,20 +219,20 @@ async function startWhatsApp() {
     const { connection, lastDisconnect, qr } = update;
     const statusCode = lastDisconnect?.error?.output?.statusCode;
 
-    if (qr && !process.env.PHONE_NUMBER) {
+    if (qr && !rawNumber) {
       console.log('\n📲 QR Code received (scan if viewing in terminal):');
       qrcode.generate(qr, { small: true });
     }
 
     if (connection === 'close') {
       isConnected = false;
-      const isAlreadyRegistered = waSocket?.authState?.creds?.registered;
+      const isRegisteredNow = Boolean(state?.creds?.registered);
 
-      console.log(`⚠️ WhatsApp connection closed. Code: ${statusCode || 'unknown'}, Registered: ${Boolean(isAlreadyRegistered)}`);
+      console.log(`⚠️ WhatsApp connection closed. Code: ${statusCode || 'unknown'}, Registered: ${isRegisteredNow}`);
 
-      // If user explicitly unlinked from phone settings AFTER being registered
-      if (isAlreadyRegistered && statusCode === DisconnectReason.loggedOut) {
-        console.log('❌ Device was unlinked from WhatsApp. Resetting session...');
+      // If Code 401 (logged out or unlinked or expired initial state)
+      if (statusCode === DisconnectReason.loggedOut || statusCode === 401) {
+        console.log('⚠️ Session reset / unlinked (401). Clearing temporary session files...');
         try {
           fs.rmSync(authDir, { recursive: true, force: true });
         } catch (e) {}
@@ -243,15 +241,15 @@ async function startWhatsApp() {
         return;
       }
 
-      // During pairing handshake: 515 (restartRequired) or temporary network close is normal
+      // During pairing handshake: 515 (restartRequired) is normal
       if (statusCode === DisconnectReason.restartRequired) {
         console.log('🔄 Completing WhatsApp pairing handshake...');
         setTimeout(startWhatsApp, 2000);
         return;
       }
 
-      // Keep connection alive so user has ample time to enter pairing code
-      console.log('🔄 Reconnecting to keep pairing session alive...');
+      // Reconnect on other network blips
+      console.log('🔄 Reconnecting WhatsApp...');
       setTimeout(startWhatsApp, 3000);
     } else if (connection === 'open') {
       isConnected = true;
@@ -319,7 +317,6 @@ async function startWhatsApp() {
       try {
         profilePicUrl = await waSocket.profilePictureUrl(senderJid, 'image');
       } catch (e) {
-        // Privacy setting or no profile photo
         profilePicUrl = null;
       }
 
@@ -331,7 +328,7 @@ async function startWhatsApp() {
         profilePicUrl: profilePicUrl
       });
 
-      // 3. Send WhatsApp Auto-Reply with cooldown to avoid spamming the sender
+      // 3. Send WhatsApp Auto-Reply with cooldown
       const now = Date.now();
       const cooldownMinutes = parseInt(process.env.COOLDOWN_MINUTES || '15', 10);
       const cooldownMs = cooldownMinutes * 60 * 1000;

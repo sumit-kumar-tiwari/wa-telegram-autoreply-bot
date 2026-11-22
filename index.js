@@ -379,4 +379,22 @@ app.get('/health', (req, res) => {
 app.listen(PORT, () => {
   console.log(`🌐 Express web server running on port ${PORT}`);
   startWhatsApp();
+
+  // Automatic Self-Ping to prevent Render free-tier sleep
+  const pingTarget = process.env.RENDER_EXTERNAL_URL || process.env.SERVER_URL;
+  const PING_INTERVAL = 8 * 60 * 1000; // 8 minutes (Render sleeps after 15 minutes)
+
+  if (pingTarget) {
+    console.log(`⏱️ Auto Keep-Alive enabled for: ${pingTarget}/health (interval: 8m)`);
+    setInterval(async () => {
+      try {
+        const res = await axios.get(`${pingTarget}/health`);
+        console.log(`💓 [Keep-Alive] Self-ping successful | uptime: ${res.data?.uptimeSeconds}s`);
+      } catch (pingErr) {
+        console.warn(`⚠️ [Keep-Alive] Self-ping warning: ${pingErr.message}`);
+      }
+    }, PING_INTERVAL);
+  } else {
+    console.log('ℹ️ RENDER_EXTERNAL_URL not yet detected. External pinger (e.g. cron-job.org) is also recommended.');
+  }
 });

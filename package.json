@@ -1,0 +1,26 @@
+{
+  "name": "wa-telegram-autoreply",
+  "version": "1.0.0",
+  "description": "WhatsApp Auto-Reply & Telegram Notification Bot deployed on Render",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": [
+    "whatsapp",
+    "telegram",
+    "auto-reply",
+    "baileys",
+    "bot"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.12",
+    "axios": "^1.7.9",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "pino": "^9.6.0",
+    "qrcode-terminal": "^0.12.0"
+  }
+}

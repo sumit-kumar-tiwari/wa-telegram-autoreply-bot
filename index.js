@@ -8,7 +8,8 @@ const {
 const pino = require('pino');
 const express = require('express');
 const axios = require('axios');
-const qrcode = require('qrcode-terminal');
+const QRCode = require('qrcode');
+const qrcodeTerminal = require('qrcode-terminal');
 const path = require('path');
 const fs = require('fs');
 require('dotenv').config();
@@ -21,6 +22,8 @@ let waSocket = null;
 let isConnected = false;
 let isPairingRequested = false;
 let activeChatId = (process.env.TELEGRAM_CHAT_ID || '').trim();
+let currentQrDataUrl = null;
+let currentPairingCode = null;
 const cooldownMap = new Map(); // Stores senderJid -> lastReplyTimestamp
 const authDir = path.join(__dirname, 'auth_info_baileys');
 
@@ -61,13 +64,13 @@ async function sendToTelegram({ name, number, message, profilePicUrl }) {
     return;
   }
 
-  // If no chat ID set or previous failed, attempt auto-detection from getUpdates
+  // If no chat ID set, search getUpdates
   if (!activeChatId) {
     console.log('🔍 [Telegram] Searching getUpdates for active conversations...');
     const detectedId = await fetchLatestChatId(token);
     if (detectedId) {
       activeChatId = detectedId;
-      console.log(`🎯 [Telegram] Auto-detected Telegram Chat ID: ${activeChatId}`);
+      console.log('🎯 [Telegram] Auto-detected Telegram Chat ID successfully');
     } else {
       console.error('❌ [Telegram] No Chat ID found! Please send "/start" to your Telegram bot.');
       return;
@@ -103,7 +106,7 @@ async function sendToTelegram({ name, number, message, profilePicUrl }) {
           caption: htmlContent,
           parse_mode: 'HTML'
         });
-        console.log(`✅ [Telegram] Photo notification successfully sent to ${targetChatId} for +${number} (${name})`);
+        console.log(`✅ [Telegram] Photo notification successfully sent for +${number} (${name})`);
         return true;
       } catch (photoErr) {
         console.warn(`⚠️ [Telegram] sendPhoto failed: ${photoErr.response?.data?.description || photoErr.message}, falling back to text...`);
@@ -116,7 +119,7 @@ async function sendToTelegram({ name, number, message, profilePicUrl }) {
         text: htmlContent,
         parse_mode: 'HTML'
       });
-      console.log(`✅ [Telegram] HTML notification successfully sent to ${targetChatId} for +${number} (${name})`);
+      console.log(`✅ [Telegram] HTML notification successfully sent for +${number} (${name})`);
       return true;
     } catch (textErr) {
       console.warn(`⚠️ [Telegram] sendMessage with HTML failed: ${textErr.response?.data?.description || textErr.message}, trying plain text...`);
@@ -126,7 +129,7 @@ async function sendToTelegram({ name, number, message, profilePicUrl }) {
       chat_id: targetChatId,
       text: plainTextContent
     });
-    console.log(`✅ [Telegram] Plain text notification successfully sent to ${targetChatId} for +${number} (${name})`);
+    console.log(`✅ [Telegram] Plain text notification successfully sent for +${number} (${name})`);
     return true;
   }
 
@@ -134,18 +137,17 @@ async function sendToTelegram({ name, number, message, profilePicUrl }) {
     await attemptSend(activeChatId);
   } catch (err) {
     const errorDesc = err.response?.data?.description || err.message;
-    console.error(`❌ [Telegram] Delivery failed to Chat ID ${activeChatId}: ${errorDesc}`);
+    console.error(`❌ [Telegram] Delivery failed: ${errorDesc}`);
 
     if (String(errorDesc).includes('chat not found')) {
       console.log('🔄 "chat not found" encountered. Refreshing getUpdates...');
       const freshChatId = await fetchLatestChatId(token);
 
       if (freshChatId && freshChatId !== activeChatId) {
-        console.log(`💡 Discovered correct Chat ID: ${freshChatId}. Retrying delivery now...`);
         activeChatId = freshChatId;
         try {
           await attemptSend(activeChatId);
-          console.log(`🎉 [Telegram] Successfully recovered and delivered notification to Chat ID: ${activeChatId}`);
+          console.log(`🎉 [Telegram] Successfully recovered and delivered notification!`);
         } catch (retryErr) {
           console.error('❌ [Telegram] Retry also failed:', retryErr.response?.data?.description || retryErr.message);
         }
@@ -167,7 +169,7 @@ async function startWhatsApp() {
     fetchLatestChatId(token).then((detected) => {
       if (detected) {
         activeChatId = detected;
-        console.log(`📱 [Telegram] Verified active Telegram Chat ID: ${activeChatId}`);
+        console.log('📱 [Telegram] Verified active Telegram Chat ID');
       }
     });
   }
@@ -188,40 +190,41 @@ async function startWhatsApp() {
   const isRegistered = Boolean(state?.creds?.registered);
   const rawNumber = (process.env.PHONE_NUMBER || '').replace(/[^0-9]/g, '');
 
-  if (!isRegistered) {
-    if (!rawNumber) {
-      console.log('⚠️ [Config] PHONE_NUMBER is not set in environment variables! Please set PHONE_NUMBER in Render (e.g. 919219471405).');
-    } else if (!isPairingRequested) {
-      isPairingRequested = true;
-      console.log(`\n⏳ Requesting 8-digit Pairing Code for phone number: +${rawNumber}...`);
+  if (!isRegistered && rawNumber && !isPairingRequested) {
+    isPairingRequested = true;
+    console.log(`\n⏳ Requesting 8-digit Pairing Code for phone number: +${rawNumber}...`);
 
-      setTimeout(async () => {
-        try {
-          if (state?.creds?.registered) return;
+    setTimeout(async () => {
+      try {
+        if (state?.creds?.registered) return;
 
-          const code = await waSocket.requestPairingCode(rawNumber);
-          console.log('\n' + '='.repeat(50));
-          console.log(`🔥 YOUR WHATSAPP PAIRING CODE: ${code}`);
-          console.log('='.repeat(50));
-          console.log('👉 Open WhatsApp on your phone -> Settings -> Linked Devices -> "Link with phone number instead"');
-          console.log(`👉 Enter this 8-digit code: ${code}`);
-          console.log('👉 (Enter this code directly on your phone)\n');
-        } catch (err) {
-          console.error('❌ Failed to get pairing code:', err.message);
-          isPairingRequested = false;
-        }
-      }, 5000);
-    }
+        const code = await waSocket.requestPairingCode(rawNumber);
+        currentPairingCode = code;
+        console.log('\n' + '='.repeat(50));
+        console.log(`🔥 YOUR WHATSAPP PAIRING CODE: ${code}`);
+        console.log('='.repeat(50));
+        console.log('👉 Open WhatsApp on your phone -> Settings -> Linked Devices -> "Link with phone number instead"');
+        console.log(`👉 Enter this 8-digit code: ${code}\n`);
+      } catch (err) {
+        console.error('❌ Failed to get pairing code:', err.message);
+        isPairingRequested = false;
+      }
+    }, 5000);
   }
 
   // Connection Update Event
-  waSocket.ev.on('connection.update', (update) => {
+  waSocket.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
     const statusCode = lastDisconnect?.error?.output?.statusCode;
 
-    if (qr && !rawNumber) {
-      console.log('\n📲 QR Code received (scan if viewing in terminal):');
-      qrcode.generate(qr, { small: true });
+    // Generate Visual QR code for Web Interface
+    if (qr) {
+      try {
+        currentQrDataUrl = await QRCode.toDataURL(qr, { margin: 2, scale: 8 });
+      } catch (e) {
+        console.error('Failed to generate QR data URL:', e.message);
+      }
+      qrcodeTerminal.generate(qr, { small: true });
     }
 
     if (connection === 'close') {
@@ -237,6 +240,8 @@ async function startWhatsApp() {
           fs.rmSync(authDir, { recursive: true, force: true });
         } catch (e) {}
         isPairingRequested = false;
+        currentPairingCode = null;
+        currentQrDataUrl = null;
         setTimeout(startWhatsApp, 3000);
         return;
       }
@@ -254,6 +259,8 @@ async function startWhatsApp() {
     } else if (connection === 'open') {
       isConnected = true;
       isPairingRequested = false;
+      currentQrDataUrl = null;
+      currentPairingCode = null;
       console.log('\n🚀 WhatsApp successfully connected and ready!');
     }
   });
@@ -353,14 +360,65 @@ async function startWhatsApp() {
 
 // Web Server Routes (For Render Keep-Alive / Health Checks)
 app.get('/', (req, res) => {
-  res.send(`
+  if (isConnected) {
+    return res.send(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>WhatsApp Bot - Connected</title>
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+        </head>
+        <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; text-align: center; padding: 60px 20px; background-color: #f0f2f5;">
+          <div style="max-width: 500px; margin: 0 auto; background: white; padding: 40px; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.08);">
+            <div style="font-size: 54px; margin-bottom: 10px;">✅</div>
+            <h2 style="color: #128c7e; margin-bottom: 8px;">Bot is Active & Running</h2>
+            <p style="color: #555; font-size: 16px;">WhatsApp is connected and listening for messages 24/7.</p>
+            <div style="margin-top: 25px; padding: 12px; background: #e8f5e9; border-radius: 8px; color: #2e7d32; font-weight: 500;">
+              Uptime: ${Math.floor(process.uptime())} seconds
+            </div>
+          </div>
+        </body>
+      </html>
+    `);
+  }
+
+  // If not connected yet, display Live QR code & instructions
+  return res.send(`
+    <!DOCTYPE html>
     <html>
-      <head><title>WhatsApp Telegram Bot</title></head>
-      <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px; background-color: #f7f9fa;">
-        <h2>🤖 WhatsApp Auto-Reply & Telegram Bot</h2>
-        <p>Status: <b style="color: ${isConnected ? 'green' : 'orange'};">${isConnected ? 'Online & Connected to WhatsApp' : 'Connecting / Disconnected'}</b></p>
-        <p>Active Telegram Chat ID: <code>${activeChatId || 'Not detected yet'}</code></p>
-        <p>Uptime: ${Math.floor(process.uptime())} seconds</p>
+      <head>
+        <title>WhatsApp Bot - Link Device</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta http-equiv="refresh" content="25">
+      </head>
+      <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; text-align: center; padding: 40px 20px; background-color: #f0f2f5;">
+        <div style="max-width: 480px; margin: 0 auto; background: white; padding: 35px 25px; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.08);">
+          <h2 style="color: #075e54; margin-top: 0;">📲 Link WhatsApp Device</h2>
+          <p style="color: #666; font-size: 15px; margin-bottom: 25px;">
+            Open <b>WhatsApp</b> on your phone &rarr; <b>Linked Devices</b> &rarr; <b>Link a Device</b> &rarr; Scan this QR Code:
+          </p>
+
+          ${
+            currentQrDataUrl
+              ? `<div style="display: inline-block; padding: 12px; background: white; border: 3px solid #25D366; border-radius: 14px; box-shadow: 0 2px 10px rgba(0,0,0,0.05);">
+                   <img src="${currentQrDataUrl}" alt="WhatsApp QR Code" width="260" height="260" style="display: block;" />
+                 </div>
+                 <p style="color: #888; font-size: 13px; margin-top: 15px;">(Auto-refreshes every 25 seconds)</p>`
+              : `<div style="padding: 40px 20px; background: #fbfbfb; border-radius: 12px; border: 1px dashed #ccc;">
+                   <div style="font-size: 32px; margin-bottom: 10px;">⏳</div>
+                   <p style="color: #777; margin: 0;">Generating QR Code... Please wait 5-10 seconds and refresh.</p>
+                 </div>`
+          }
+
+          ${
+            currentPairingCode
+              ? `<div style="margin-top: 25px; padding: 14px; background: #f9f9f9; border-radius: 10px; border: 1px solid #eee;">
+                   <span style="color: #666; font-size: 14px;">Or use Pairing Code:</span><br/>
+                   <b style="font-size: 24px; letter-spacing: 3px; color: #128c7e;">${currentPairingCode}</b>
+                 </div>`
+              : ''
+          }
+        </div>
       </body>
     </html>
   `);
@@ -370,7 +428,6 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     whatsappConnected: isConnected,
-    telegramChatIdSet: Boolean(activeChatId),
     uptimeSeconds: Math.floor(process.uptime())
   });
 });

@@ -17,9 +17,6 @@ require('dotenv').config();
 // Initialize Express App for Web Service / Uptime Monitoring
 const app = express();
 const PORT = process.env.PORT || 3000;
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'antigravity';
-
-app.use(express.urlencoded({ extended: true }));
 
 let waSocket = null;
 let isConnected = false;
@@ -29,6 +26,7 @@ let currentQrDataUrl = null;
 let currentPairingCode = null;
 const cooldownMap = new Map(); // Stores senderJid -> lastReplyTimestamp
 const authDir = path.join(__dirname, 'auth_info_baileys');
+const localImagePath = path.join(__dirname, 'autoreply.jpg');
 
 // Helper to escape HTML characters for Telegram formatting
 function escapeHtml(text) {
@@ -338,7 +336,7 @@ async function startWhatsApp() {
         profilePicUrl: profilePicUrl
       });
 
-      // 3. Send WhatsApp Auto-Reply with cooldown
+      // 3. Send WhatsApp Auto-Reply (Photo with Caption if image exists, else text)
       const now = Date.now();
       const cooldownMinutes = parseInt(process.env.COOLDOWN_MINUTES || '15', 10);
       const cooldownMs = cooldownMinutes * 60 * 1000;
@@ -349,8 +347,16 @@ async function startWhatsApp() {
         const autoReplyText = process.env.AUTO_REPLY_MESSAGE || "he'll response once he get online.";
 
         try {
-          await waSocket.sendMessage(senderJid, { text: autoReplyText }, { quoted: m });
-          console.log(`🤖 [Auto-Reply] Sent to +${senderNumber}: "${autoReplyText}"`);
+          if (fs.existsSync(localImagePath)) {
+            await waSocket.sendMessage(senderJid, {
+              image: fs.readFileSync(localImagePath),
+              caption: autoReplyText
+            }, { quoted: m });
+            console.log(`🤖 [Auto-Reply] Sent cat photo reply with caption to +${senderNumber}`);
+          } else {
+            await waSocket.sendMessage(senderJid, { text: autoReplyText }, { quoted: m });
+            console.log(`🤖 [Auto-Reply] Sent text reply to +${senderNumber}: "${autoReplyText}"`);
+          }
         } catch (err) {
           console.error(`❌ [Auto-Reply] Failed to send reply to +${senderNumber}:`, err.message);
         }
@@ -361,17 +367,49 @@ async function startWhatsApp() {
   });
 }
 
-// Protected Web Dashboard
-app.all('/', (req, res) => {
-  const providedPass = (req.query.pass || req.body?.pass || '').trim();
+// Web Server Routes (For Render Keep-Alive / Health Checks)
+app.get('/', (req, res) => {
+  const MASTER_PASSWORD = 'antigravity';
+  const queryPin = req.query.pin || req.query.key;
+  const cookieHeader = req.headers.cookie || '';
+  const isCookieAuth = cookieHeader.includes('wa_auth=antigravity');
 
-  // If already connected, show clean running status
+  // Verify credentials
+  if (queryPin === MASTER_PASSWORD) {
+    res.setHeader('Set-Cookie', 'wa_auth=antigravity; Path=/; Max-Age=2592000; SameSite=Lax');
+  } else if (!isCookieAuth) {
+    // Show password lock screen
+    return res.status(401).send(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>WhatsApp Bot - Protected</title>
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+        </head>
+        <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; text-align: center; padding: 60px 20px; background-color: #f0f2f5;">
+          <div style="max-width: 400px; margin: 0 auto; background: white; padding: 40px 25px; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.08);">
+            <div style="font-size: 48px; margin-bottom: 12px;">🔒</div>
+            <h2 style="color: #075e54; margin: 0 0 8px 0;">Dashboard Locked</h2>
+            <p style="color: #666; font-size: 14px; margin-bottom: 25px;">Enter the access password to view the WhatsApp QR Code.</p>
+            ${queryPin ? '<p style="color: #e53935; font-size: 14px; margin-bottom: 15px; font-weight: 500;">❌ Incorrect Password</p>' : ''}
+            <form method="GET" action="/">
+              <input type="password" name="pin" placeholder="Enter password" style="width: 85%; max-width: 280px; padding: 12px 14px; border: 1.5px solid #ccc; border-radius: 8px; font-size: 16px; margin-bottom: 15px; outline: none; box-sizing: border-box;" autofocus required />
+              <br/>
+              <button type="submit" style="background: #25D366; color: white; border: none; padding: 12px 28px; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer;">Unlock Dashboard</button>
+            </form>
+          </div>
+        </body>
+      </html>
+    `);
+  }
+
+  // Once authenticated (via cookie or pin)
   if (isConnected) {
     return res.send(`
       <!DOCTYPE html>
       <html>
         <head>
-          <title>WhatsApp Bot - Active</title>
+          <title>WhatsApp Bot - Connected</title>
           <meta name="viewport" content="width=device-width, initial-scale=1">
         </head>
         <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; text-align: center; padding: 60px 20px; background-color: #f0f2f5;">
@@ -388,33 +426,7 @@ app.all('/', (req, res) => {
     `);
   }
 
-  // Password verification: require password 'antigravity' to view the QR code
-  if (providedPass !== ADMIN_PASSWORD) {
-    const errorMsg = providedPass ? '<p style="color: #e74c3c; font-size: 14px; margin-top: 14px;">❌ Galat password! Kripya dobara try karein.</p>' : '';
-    return res.send(`
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <title>WhatsApp Bot - Protected Access</title>
-          <meta name="viewport" content="width=device-width, initial-scale=1">
-        </head>
-        <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; background: #0b141a; color: #e9edef;">
-          <div style="background: #111b21; padding: 35px 28px; border-radius: 16px; width: 100%; max-width: 360px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); text-align: center; border: 1px solid #222d34;">
-            <div style="font-size: 42px; margin-bottom: 12px;">🔒</div>
-            <h3 style="margin: 0 0 8px 0; color: #00a884; font-size: 20px;">Protected Setup</h3>
-            <p style="color: #8696a0; font-size: 14px; margin-bottom: 24px;">WhatsApp QR code dekhne ke liye password enter karein</p>
-            <form method="GET" action="/">
-              <input type="password" name="pass" placeholder="Enter password" required autofocus style="width: 100%; box-sizing: border-box; padding: 13px 15px; border-radius: 8px; border: 1px solid #2a3942; background: #202c33; color: #fff; font-size: 15px; outline: none; margin-bottom: 15px;" />
-              <button type="submit" style="width: 100%; padding: 13px; border-radius: 8px; border: none; background: #00a884; color: #111b21; font-weight: 700; font-size: 15px; cursor: pointer; transition: background 0.2s;">Unlock QR Code</button>
-            </form>
-            ${errorMsg}
-          </div>
-        </body>
-      </html>
-    `);
-  }
-
-  // Password verified: render Live QR code
+  // If not connected yet, display Live QR code & instructions
   return res.send(`
     <!DOCTYPE html>
     <html>
@@ -425,9 +437,6 @@ app.all('/', (req, res) => {
       </head>
       <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; text-align: center; padding: 40px 20px; background-color: #f0f2f5;">
         <div style="max-width: 480px; margin: 0 auto; background: white; padding: 35px 25px; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.08);">
-          <div style="display: inline-block; padding: 4px 12px; background: #e8f5e9; color: #2e7d32; border-radius: 20px; font-size: 13px; font-weight: 600; margin-bottom: 12px;">
-            🔓 Unlocked via Antigravity
-          </div>
           <h2 style="color: #075e54; margin-top: 0;">📲 Link WhatsApp Device</h2>
           <p style="color: #666; font-size: 15px; margin-bottom: 25px;">
             Open <b>WhatsApp</b> on your phone &rarr; <b>Linked Devices</b> &rarr; <b>Link a Device</b> &rarr; Scan this QR Code:

@@ -1,5 +1,7 @@
 # 🤖 WhatsApp Auto-Reply & Telegram Notifier
 
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/sumit-kumar-tiwari/wa-telegram-autoreply-bot)
+
 Jab bhi aapke WhatsApp par koi message aayega:
 1. Sender ko auto-reply chala jayega: `"he'll response once he get online."`
 2. Aapke **Telegram** par instantly notification aa jayegi:

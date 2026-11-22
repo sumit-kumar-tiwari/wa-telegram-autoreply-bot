@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: wa-telegram-autoreply-bot
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node index.js
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: PHONE_NUMBER
+        sync: false
+      - key: AUTO_REPLY_MESSAGE
+        value: "he'll response once he get online."
+      - key: COOLDOWN_MINUTES
+        value: "15"

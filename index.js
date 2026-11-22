@@ -34,13 +34,13 @@ function escapeHtml(text) {
     .replace(/'/g, '&#039;');
 }
 
-// Telegram Notification Sender
+// Telegram Notification Sender with multi-level fallback
 async function sendToTelegram({ name, number, message, profilePicUrl }) {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_CHAT_ID;
+  const token = (process.env.TELEGRAM_BOT_TOKEN || '').trim();
+  const chatId = (process.env.TELEGRAM_CHAT_ID || '').trim();
 
   if (!token || !chatId) {
-    console.error('⚠️ [Telegram] TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID is missing in environment variables!');
+    console.error('⚠️ [Telegram] TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID is missing or empty in Render Environment Variables!');
     return;
   }
 
@@ -58,31 +58,51 @@ async function sendToTelegram({ name, number, message, profilePicUrl }) {
                       `💬 <b>Message:</b>\n${escapeHtml(message)}\n\n` +
                       `⏰ <b>Timestamp:</b> ${escapeHtml(timeString)}`;
 
-  try {
-    if (profilePicUrl) {
-      try {
-        await axios.post(`https://api.telegram.org/bot${token}/sendPhoto`, {
-          chat_id: chatId,
-          photo: profilePicUrl,
-          caption: htmlContent,
-          parse_mode: 'HTML'
-        });
-        console.log(`✅ [Telegram] Photo notification successfully sent for +${number} (${name})`);
-        return;
-      } catch (photoErr) {
-        console.warn(`⚠️ [Telegram] sendPhoto failed, falling back to sendMessage: ${photoErr.message}`);
-      }
-    }
+  const plainTextContent = `🔔 New WhatsApp Message Received\n\n` +
+                           `👤 Sender: ${name}\n` +
+                           `📱 Phone: +${number}\n` +
+                           `💬 Message:\n${message}\n\n` +
+                           `⏰ Timestamp: ${timeString}`;
 
-    // Fallback or text-only message
+  // Step 1: Attempt to send photo with HTML caption
+  if (profilePicUrl) {
+    try {
+      await axios.post(`https://api.telegram.org/bot${token}/sendPhoto`, {
+        chat_id: chatId,
+        photo: profilePicUrl,
+        caption: htmlContent,
+        parse_mode: 'HTML'
+      });
+      console.log(`✅ [Telegram] Photo notification successfully sent for +${number} (${name})`);
+      return;
+    } catch (photoErr) {
+      console.warn(`⚠️ [Telegram] sendPhoto failed (${photoErr.response?.data?.description || photoErr.message}), falling back to text...`);
+    }
+  }
+
+  // Step 2: Attempt to send formatted HTML text message
+  try {
     await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, {
       chat_id: chatId,
       text: htmlContent,
       parse_mode: 'HTML'
     });
-    console.log(`✅ [Telegram] Text notification successfully sent for +${number} (${name})`);
-  } catch (err) {
-    console.error('❌ [Telegram] Error sending message:', err.response?.data || err.message);
+    console.log(`✅ [Telegram] HTML text notification successfully sent for +${number} (${name})`);
+    return;
+  } catch (textErr) {
+    console.warn(`⚠️ [Telegram] sendMessage with HTML failed (${textErr.response?.data?.description || textErr.message}), trying plain text...`);
+  }
+
+  // Step 3: Attempt to send plain text message (guaranteed safe against parse errors)
+  try {
+    await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, {
+      chat_id: chatId,
+      text: plainTextContent
+    });
+    console.log(`✅ [Telegram] Plain text notification successfully sent for +${number} (${name})`);
+  } catch (finalErr) {
+    const errorDetails = finalErr.response?.data || finalErr.message;
+    console.error('❌ [Telegram] Error sending message to Telegram:', JSON.stringify(errorDetails));
   }
 }
 

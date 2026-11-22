@@ -1,78 +1,110 @@
-# 🤖 WhatsApp Auto-Reply & Telegram Notifier
+# 🤖 WhatsApp Auto-Reply & Telegram Notifier Bot
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/sumit-kumar-tiwari/wa-telegram-autoreply-bot)
 
-Jab bhi aapke WhatsApp par koi message aayega:
-1. Sender ko auto-reply chala jayega: `"he'll response once he get online."`
-2. Aapke **Telegram** par instantly notification aa jayegi:
-   - 👤 **Sender ka Naam**
-   - 📱 **Phone Number**
-   - 🖼️ **Profile Picture**
-   - 💬 **Message Text / Media type**
-   - ⏰ **Exact Waqt (IST)**
+A lightweight, 24/7 automated bot that sends instant auto-replies to incoming WhatsApp messages and delivers real-time notifications with sender information (Name, Phone Number, Profile Photo, and Message Content) directly to your Telegram account.
 
 ---
 
-## 🚀 Setup & Deployment Guide (Render.com par 100% Free)
+## ✨ Features
 
-### Step 1: Telegram Bot Token & Chat ID nikalna
-
-1. Telegram par search karein: **`@BotFather`**
-2. `/newbot` command send karein aur bot ka name & username choose karein.
-3. BotFather aapko ek **API Token** dega (e.g., `123456789:AA...`). Isse copy kar lein.
-4. Ab Telegram par search karein: **`@userinfobot`** aur `/start` karein. Ye aapko aapki numeric **Id** dega (ye aapka `TELEGRAM_CHAT_ID` hai).
-5. Apne banaye hue bot me jakar ek baar `/start` zaroor press karein taaki bot aapko message bhej sake.
-
----
-
-### Step 2: Code ko GitHub par Daalna
-
-1. [GitHub.com](https://github.com) par ek naya private ya public repository banayein (e.g. `wa-telegram-bot`).
-2. Is folder ke code ko GitHub par push kar dein.
+- 💬 **Instant Auto-Reply:** Automatically replies to direct 1-on-1 WhatsApp messages with a customizable message (e.g., *"he'll response once he get online."*).
+- 🔔 **Instant Telegram Alerts:** Delivers detailed notifications to Telegram including:
+  - 👤 **Sender Name**
+  - 📱 **Phone Number**
+  - 🖼️ **Sender Profile Picture** (retrieved automatically)
+  - 💬 **Message Text / Media Type** (Photos, Videos, Audio, Documents, Locations, etc.)
+  - ⏰ **Timestamp (IST)**
+- 🛡️ **Anti-Spam Cooldown:** Prevents spamming contacts with repeated auto-replies if they send multiple consecutive messages (customizable cooldown window, default 15 minutes).
+- 🚫 **Group & Status Filter:** Automatically ignores group chats and WhatsApp status broadcasts to prevent unnecessary notifications.
+- 🔑 **Browserless Pairing Code:** Authenticate in headless cloud environments (like Render or VPS) using an 8-digit phone pairing code without needing a browser or camera.
+- ☁️ **Cloud-Ready & Memory-Efficient:** Built using `@whiskeysockets/baileys` directly over WhatsApp sockets (consumes only ~50MB RAM, ideal for free tier cloud hosting). Includes an integrated Express web server for uptime health checks.
 
 ---
 
-### Step 3: Render.com par Deploy karna (Free Web Service)
+## 🚀 One-Click Deployment (Render.com)
 
-1. [Render.com](https://render.com) par free account banayein ya login karein.
-2. Dashboard par click karein: **`New +` -> `Web Service`**.
-3. Apni GitHub repository ko connect karein.
-4. Settings me ye details daalein:
-   - **Name:** `wa-telegram-bot`
-   - **Environment:** `Node`
-   - **Build Command:** `npm install`
-   - **Start Command:** `node index.js`
-   - **Instance Type:** `Free`
-5. **Environment Variables** section me jakar ye variables add karein:
-   - `TELEGRAM_BOT_TOKEN`: *(Step 1 se mila hua token)*
-   - `TELEGRAM_CHAT_ID`: *(Step 1 se mili hui chat id)*
-   - `PHONE_NUMBER`: *(Aapka WhatsApp number country code ke sath, bina + ya space ke, jaise `919876543210`)*
-   - `AUTO_REPLY_MESSAGE`: `he'll response once he get online.`
-   - `COOLDOWN_MINUTES`: `15` *(Ek sender ko baar-baar spam na ho isliye 15 min ka gap)*
-6. **"Deploy Web Service"** par click karein.
+### Step 1: Obtain Telegram Credentials
+1. Open Telegram and search for **`@BotFather`**.
+2. Send `/newbot`, then follow the prompts to choose a bot name and username.
+3. Copy the **HTTP API Token** provided by BotFather (e.g., `123456789:ABCdefGhI...`).
+4. Search for **`@userinfobot`** on Telegram and click `/start`. Copy your numeric **Id** (this is your `TELEGRAM_CHAT_ID`).
+5. Open your newly created bot in Telegram and click **`/start`** to enable it to message you.
 
 ---
 
-### Step 4: WhatsApp Link Karna (Pairing Code)
+### Step 2: Deploy to Render
+1. Click the button below:
+   
+   [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/sumit-kumar-tiwari/wa-telegram-autoreply-bot)
 
-1. Deploy hone ke baad Render dashboard par **"Logs"** tab me jayein.
-2. 5-10 second me logs me aapko ek **8-digit Pairing Code** dikhega (e.g. `ABC1-XYZ2`).
-3. Apne phone me WhatsApp open karein:
-   - **Settings** (ya 3 dots) -> **Linked Devices**
-   - **Link a Device** par tap karein
-   - Niche **"Link with phone number instead"** par tap karein
-   - Render ke logs me dikha hua **8-digit code** daal dein!
-4. WhatsApp successfully link ho jayega aur logs me likha aayega:  
-   `🚀 WhatsApp successfully connected and ready!`
+2. Fill in the required environment variables:
+   - `TELEGRAM_BOT_TOKEN`: The API token from `@BotFather`.
+   - `TELEGRAM_CHAT_ID`: Your Telegram numeric ID from `@userinfobot`.
+   - `PHONE_NUMBER`: Your WhatsApp phone number including country code without `+` or spaces (e.g., `919876543210`).
+   - `AUTO_REPLY_MESSAGE`: `he'll response once he get online.` (or your custom message).
+   - `COOLDOWN_MINUTES`: `15`
+3. Click **"Apply"** to deploy the service.
 
 ---
 
-### Step 5: Render ko 24/7 Alive Rakhna (No Sleep)
+### Step 3: Link WhatsApp via Pairing Code
+1. Once deployed, open the **Logs** tab in your Render dashboard.
+2. Locate the 8-digit Pairing Code generated in the logs (e.g., `ABCD-1234`).
+3. On your phone, open WhatsApp:
+   - Go to **Settings** (or Menu) > **Linked Devices** > **Link a Device**.
+   - Tap **"Link with phone number instead"** at the bottom.
+   - Enter the **8-digit code** displayed in your Render logs.
+4. Once linked, the logs will show:
+   ```text
+   🚀 WhatsApp successfully connected and ready!
+   ```
 
-Render ka free tier 15 min inactive rehne par so jata hai. Isse rokne ke liye:
-1. Render dashboard se apni service ka URL copy karein (e.g. `https://wa-telegram-bot.onrender.com`).
-2. [cron-job.org](https://cron-job.org) par free account banayein.
-3. Ek naya Cronjob banayein:
-   - **URL:** `https://wa-telegram-bot.onrender.com/health`
-   - **Schedule:** Har **10 minutes** me run hone ke liye set karein.
-4. Ab ye service Render ko har 10 minute me ping karti rahegi aur aapka bot **24/7 bina ruke chalta rahega!**
+---
+
+### Step 4: Keep the Bot Running 24/7 (Prevent Free-Tier Sleep)
+Render free services sleep after 15 minutes of inactivity. To keep your bot running 24/7 without interruption:
+1. Copy your Render web service URL (e.g., `https://wa-telegram-bot.onrender.com`).
+2. Register for a free account at [cron-job.org](https://cron-job.org).
+3. Create a scheduled job:
+   - **URL:** `https://your-app-name.onrender.com/health`
+   - **Interval:** Every **10 minutes**.
+4. This keeps the web service active continuously.
+
+---
+
+## ⚙️ Environment Variables
+
+| Variable | Description | Example |
+| :--- | :--- | :--- |
+| `TELEGRAM_BOT_TOKEN` | Bot API token from `@BotFather` | `123456789:ABC...` |
+| `TELEGRAM_CHAT_ID` | Your Telegram user ID from `@userinfobot` | `987654321` |
+| `PHONE_NUMBER` | Your WhatsApp number with country code | `919876543210` |
+| `AUTO_REPLY_MESSAGE` | Automated response message sent on WhatsApp | `he'll response once he get online.` |
+| `COOLDOWN_MINUTES` | Cooldown period between auto-replies to the same contact | `15` |
+| `PORT` | Web server port (automatically assigned by Render) | `3000` |
+
+---
+
+## 🛠️ Local Development
+
+```bash
+# Clone the repository
+git clone https://github.com/sumit-kumar-tiwari/wa-telegram-autoreply-bot.git
+cd wa-telegram-autoreply-bot
+
+# Install dependencies
+npm install
+
+# Configure environment variables
+cp .env.example .env
+# Edit .env with your credentials
+
+# Start the bot
+npm start
+```
+
+---
+
+## 📄 License
+This project is licensed under the [ISC License](LICENSE).

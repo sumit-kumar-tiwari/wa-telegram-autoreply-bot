@@ -13,7 +13,7 @@ const path = require('path');
 const fs = require('fs');
 require('dotenv').config();
 
-// Initialize Express App for Render Web Service
+// Initialize Express App for Web Service / Uptime Monitoring
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -23,7 +23,7 @@ let isPairingRequested = false;
 const cooldownMap = new Map(); // Stores senderJid -> lastReplyTimestamp
 const authDir = path.join(__dirname, 'auth_info_baileys');
 
-// Helper to escape HTML for Telegram
+// Helper to escape HTML characters for Telegram formatting
 function escapeHtml(text) {
   if (!text) return '';
   return String(text)
@@ -52,11 +52,11 @@ async function sendToTelegram({ name, number, message, profilePicUrl }) {
     hour12: true
   });
 
-  const htmlContent = `<b>🔔 Naya WhatsApp Message Aaya Hai!</b>\n\n` +
-                      `👤 <b>Naam:</b> ${escapeHtml(name)}\n` +
-                      `📱 <b>Number:</b> +${escapeHtml(number)}\n` +
+  const htmlContent = `<b>🔔 New WhatsApp Message Received</b>\n\n` +
+                      `👤 <b>Sender:</b> ${escapeHtml(name)}\n` +
+                      `📱 <b>Phone:</b> +${escapeHtml(number)}\n` +
                       `💬 <b>Message:</b>\n${escapeHtml(message)}\n\n` +
-                      `⏰ <b>Waqt:</b> ${escapeHtml(timeString)}`;
+                      `⏰ <b>Timestamp:</b> ${escapeHtml(timeString)}`;
 
   try {
     if (profilePicUrl) {
@@ -106,7 +106,7 @@ async function startWhatsApp() {
     syncFullHistory: false
   });
 
-  // Pairing code feature - only request ONCE so code stays stable
+  // Pairing code feature - only request once to ensure stable code
   const isRegistered = waSocket.authState?.creds?.registered;
 
   if (!isRegistered && process.env.PHONE_NUMBER && !isPairingRequested) {
@@ -123,9 +123,9 @@ async function startWhatsApp() {
         console.log('\n' + '='.repeat(50));
         console.log(`🔥 YOUR WHATSAPP PAIRING CODE: ${code}`);
         console.log('='.repeat(50));
-        console.log('👉 WhatsApp open karein -> Linked Devices -> "Link with phone number instead"');
-        console.log(`👉 Yeh 8-digit code daalein: ${code}`);
-        console.log('👉 (Yeh code stable rahega, aaram se phone me enter karein)\n');
+        console.log('👉 Open WhatsApp on your phone -> Settings -> Linked Devices -> "Link with phone number instead"');
+        console.log(`👉 Enter this 8-digit code: ${code}`);
+        console.log('👉 (This pairing code is stable; enter it directly on your phone)\n');
       } catch (err) {
         console.error('❌ Failed to get pairing code:', err.message);
         isPairingRequested = false; // Allow retry on fatal failure
@@ -160,8 +160,7 @@ async function startWhatsApp() {
         return;
       }
 
-      // During pairing handshake: 515 (restartRequired) or temporary network close is NORMAL
-      // DO NOT reset session or change code, just reconnect cleanly
+      // During pairing handshake: 515 (restartRequired) or temporary network close is normal
       if (statusCode === DisconnectReason.restartRequired) {
         console.log('🔄 Completing WhatsApp pairing handshake...');
         setTimeout(startWhatsApp, 2000);
